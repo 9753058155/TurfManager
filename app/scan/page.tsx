@@ -66,11 +66,13 @@ export default function ScanPage() {
         video: { facingMode: 'environment', width: { ideal: 1280 }, height: { ideal: 720 } }
       })
       streamRef.current = stream
+      setScanning(true) // triggers re-render with video element visible
+      // Wait for next frame so videoRef is assigned after render
+      await new Promise(resolve => requestAnimationFrame(resolve))
       if (videoRef.current) {
         videoRef.current.srcObject = stream
-        await videoRef.current.play()
+        try { await videoRef.current.play() } catch {}
       }
-      setScanning(true)
 
       const jsQR = (await import('jsqr')).default
       const canvas = document.createElement('canvas')
@@ -150,7 +152,30 @@ export default function ScanPage() {
         {/* Camera */}
         {mode === 'camera' && (
           <div className="card" style={{ marginBottom: 16 }}>
-            {!scanning ? (
+            {/* Video always rendered so ref is always available */}
+            <video
+              ref={videoRef}
+              playsInline
+              autoPlay
+              muted
+              style={{
+                width: '100%', borderRadius: 8, background: '#000',
+                display: scanning ? 'block' : 'none'
+              }}
+            />
+
+            {scanning && (
+              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginTop: 12 }}>
+                <span style={{ fontSize: 13, color: 'var(--grass-bright)', display: 'flex', alignItems: 'center', gap: 6 }}>
+                  <span className="spinner" style={{ width: 14, height: 14, borderWidth: 2 }} />
+                  Scanning for QR...
+                </span>
+                <button className="btn btn-ghost" style={{ padding: '6px 14px', fontSize: 13 }}
+                  onClick={stopCamera}>Stop</button>
+              </div>
+            )}
+
+            {!scanning && (
               <div style={{ textAlign: 'center', padding: '28px 0' }}>
                 <div style={{ fontSize: 52, marginBottom: 12 }}>📷</div>
                 {cameraError && (
@@ -166,19 +191,6 @@ export default function ScanPage() {
                 <button className="btn btn-primary" onClick={startCamera}>
                   Start Camera
                 </button>
-              </div>
-            ) : (
-              <div>
-                <video ref={videoRef} playsInline muted
-                  style={{ width: '100%', borderRadius: 8, background: '#000', display: 'block' }} />
-                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginTop: 12 }}>
-                  <span style={{ fontSize: 13, color: 'var(--grass-bright)', display: 'flex', alignItems: 'center', gap: 6 }}>
-                    <span className="spinner" style={{ width: 14, height: 14, borderWidth: 2 }} />
-                    Scanning for QR...
-                  </span>
-                  <button className="btn btn-ghost" style={{ padding: '6px 14px', fontSize: 13 }}
-                    onClick={stopCamera}>Stop</button>
-                </div>
               </div>
             )}
           </div>

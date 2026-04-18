@@ -62,42 +62,34 @@ export default function HomePage() {
 
   const fetchSlots = useCallback(async () => {
     setLoading(true)
-    const { data: fees } = await supabase.from('slot_fees').select('*')
-    if (fees) setSlotFees(fees)
+    try {
+      // Fetch fees (public, RLS allows all reads)
+      const { data: fees } = await supabase.from('slot_fees').select('*')
+      if (fees) setSlotFees(fees)
 
-    const { data: bookings } = await supabase
-      .from('bookings')
-      .select('start_time, end_time, status, lock_expires_at')
-      .eq('date', selectedDate)
-      .in('status', ['confirmed', 'pending'])
+      // Use API route (service role) so we see ALL users' bookings, not just own
+      const res = await fetch(`/api/slots?date=${selectedDate}`)
+      const { bookings } = await res.json()
 
-    const generated: Slot[] = []
-    for (let h = 6; h < 22; h++) {
-      const start = `${String(h).padStart(2,'0')}:00`
-      const end = `${String(h+1).padStart(2,'0')}:00`
-      const now = new Date()
-      const isBooked = bookings?.some(b => {
-        if (b.start_time !== start) return false
-        if (b.status === 'confirmed') return true
-        // pending: only block if lock not expired (lock_expires_at exists and is in future)
-        if (b.status === 'pending') {
-          if (!b.lock_expires_at) return true // no expiry set, treat as blocked
-          return new Date(b.lock_expires_at) > now
-        }
-        return false
-      }) || false
-      const fee = fees?.find(f => f.slot_time === start)
-      generated.push({
-        id: `${selectedDate}-${start}`,
-        date: selectedDate,
-        start_time: start,
-        end_time: end,
-        status: isBooked ? 'booked' : 'available',
-        price: fee?.price ?? 500
-      })
+      const generated: Slot[] = []
+      for (let h = 6; h < 22; h++) {
+        const start = `${String(h).padStart(2,'0')}:00`
+        const end = `${String(h+1).padStart(2,'0')}:00`
+        const isBooked = (bookings ?? []).some((b: any) => b.start_time === start)
+        const fee = fees?.find((f: any) => f.slot_time === start)
+        generated.push({
+          id: `${selectedDate}-${start}`,
+          date: selectedDate,
+          start_time: start,
+          end_time: end,
+          status: isBooked ? 'booked' : 'available',
+          price: fee?.price ?? 500
+        })
+      }
+      setSlots(generated)
+    } finally {
+      setLoading(false)
     }
-    setSlots(generated)
-    setLoading(false)
   }, [selectedDate])
 
   useEffect(() => { fetchSlots() }, [fetchSlots])
