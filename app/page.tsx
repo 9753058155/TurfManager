@@ -67,7 +67,7 @@ export default function HomePage() {
 
     const { data: bookings } = await supabase
       .from('bookings')
-      .select('start_time, end_time, status')
+      .select('start_time, end_time, status, lock_expires_at')
       .eq('date', selectedDate)
       .in('status', ['confirmed', 'pending'])
 
@@ -75,7 +75,17 @@ export default function HomePage() {
     for (let h = 6; h < 22; h++) {
       const start = `${String(h).padStart(2,'0')}:00`
       const end = `${String(h+1).padStart(2,'0')}:00`
-      const isBooked = bookings?.some(b => b.start_time === start) || false
+      const now = new Date()
+      const isBooked = bookings?.some(b => {
+        if (b.start_time !== start) return false
+        if (b.status === 'confirmed') return true
+        // pending: only block if lock not expired (lock_expires_at exists and is in future)
+        if (b.status === 'pending') {
+          if (!b.lock_expires_at) return true // no expiry set, treat as blocked
+          return new Date(b.lock_expires_at) > now
+        }
+        return false
+      }) || false
       const fee = fees?.find(f => f.slot_time === start)
       generated.push({
         id: `${selectedDate}-${start}`,
@@ -93,14 +103,22 @@ export default function HomePage() {
   useEffect(() => { fetchSlots() }, [fetchSlots])
 
   useEffect(() => {
+    // Realtime: any change to bookings triggers a slot refresh
+    // No filter — filters in realtime require special Supabase config, just refresh always
     const channel = supabase
-      .channel(`slots-${selectedDate}`)
+      .channel('bookings-changes')
       .on('postgres_changes', {
-        event: '*', schema: 'public', table: 'bookings',
-        filter: `date=eq.${selectedDate}`
+        event: '*', schema: 'public', table: 'bookings'
       }, () => fetchSlots())
       .subscribe()
-    return () => { supabase.removeChannel(channel) }
+
+    // Polling fallback every 20s in case realtime misses events
+    const poll = setInterval(fetchSlots, 20000)
+
+    return () => {
+      supabase.removeChannel(channel)
+      clearInterval(poll)
+    }
   }, [selectedDate, fetchSlots])
 
   const handleSlotClick = (slot: Slot) => {
