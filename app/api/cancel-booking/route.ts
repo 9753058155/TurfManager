@@ -1,3 +1,5 @@
+export const dynamic = 'force-dynamic'
+
 import { NextRequest, NextResponse } from 'next/server'
 import { supabaseAdmin } from '@/lib/supabase'
 
@@ -19,7 +21,6 @@ export async function POST(req: NextRequest) {
     const refundPct = isAdmin ? 1 : 0.5
     const refundAmount = Math.round(booking.amount * refundPct)
 
-    // Atomic: cancel booking + credit wallet
     const [cancelRes, walletRes] = await Promise.all([
       db.from('bookings').update({ status: 'cancelled' }).eq('id', bookingId),
       db.from('profiles').select('wallet_balance').eq('id', booking.user_id).single()
