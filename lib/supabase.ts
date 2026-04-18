@@ -14,14 +14,10 @@ export const getSupabase = () => {
 
 // ✅ ADMIN (server only)
 export const supabaseAdmin = () => {
+  const serviceKey = process.env.SUPABASE_SERVICE_ROLE_KEY
   const url = process.env.NEXT_PUBLIC_SUPABASE_URL
-  const service = process.env.SUPABASE_SERVICE_ROLE_KEY
-
-  if (!url || !service) {
-    throw new Error('Missing Supabase admin env vars')
-  }
-
-  return createClient(url, service, {
+  if (!serviceKey || !url) throw new Error('Missing Supabase service role env vars')
+  return createClient(url, serviceKey, {
     auth: { autoRefreshToken: false, persistSession: false }
   })
 }
