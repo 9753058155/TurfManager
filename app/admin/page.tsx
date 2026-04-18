@@ -210,9 +210,14 @@ export default function AdminPage() {
           <div className="card" style={{ overflowX: 'auto' }}>
             <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 20 }}>
               <h3 style={{ fontFamily: 'Bebas Neue', fontSize: 26 }}>ALL BOOKINGS</h3>
-              <button className="btn btn-ghost" style={{ padding: '8px 16px', fontSize: 13 }} onClick={fetchBookings}>
-                Refresh
-              </button>
+              <div style={{ display: 'flex', gap: 8 }}>
+                <a href="/scan" className="btn btn-primary" style={{ padding: '8px 16px', fontSize: 13 }}>
+                  📷 Scan QR
+                </a>
+                <button className="btn btn-ghost" style={{ padding: '8px 16px', fontSize: 13 }} onClick={fetchBookings}>
+                  Refresh
+                </button>
+              </div>
             </div>
             {stats.pending > 0 && (
               <div style={{
@@ -225,7 +230,7 @@ export default function AdminPage() {
             )}
             <table className="table">
               <thead>
-                <tr><th>ID</th><th>Date</th><th>Time</th><th>Amount</th><th>Status</th><th>Action</th></tr>
+                <tr><th>ID</th><th>Name</th><th>Phone</th><th>Date</th><th>Time</th><th>Amount</th><th>Status</th><th>Action</th></tr>
               </thead>
               <tbody>
                 {bookings.map(b => (
@@ -233,6 +238,8 @@ export default function AdminPage() {
                     <td style={{ fontFamily: 'monospace', fontSize: 12, color: 'var(--text-muted)' }}>
                       #{b.id.slice(0, 8).toUpperCase()}
                     </td>
+                    <td style={{ fontSize: 13, fontWeight: 500 }}>{b.user_name || '—'}</td>
+                    <td style={{ fontSize: 13, color: 'var(--text-muted)' }}>{b.user_phone || '—'}</td>
                     <td>{b.date}</td>
                     <td style={{ whiteSpace: 'nowrap' }}>
                       {toAmPm(b.start_time)} - {toAmPm(b.end_time)}
@@ -281,10 +288,11 @@ export default function AdminPage() {
               <thead>
                 <tr>
                   <th>Receipt #</th>
+                  <th>Name</th>
+                  <th>Phone</th>
                   <th>Date</th>
                   <th>Slot</th>
                   <th>Amount</th>
-                  <th>Payment ID</th>
                   <th>Status</th>
                 </tr>
               </thead>
@@ -294,14 +302,13 @@ export default function AdminPage() {
                     <td style={{ fontFamily: 'monospace', fontSize: 12, color: 'var(--grass-bright)' }}>
                       {r.receipt_number}
                     </td>
+                    <td style={{ fontSize: 13, fontWeight: 500 }}>{r.user_name || '—'}</td>
+                    <td style={{ fontSize: 13, color: 'var(--text-muted)' }}>{r.user_phone || '—'}</td>
                     <td>{r.date}</td>
                     <td style={{ whiteSpace: 'nowrap' }}>
                       {r.start_time ? toAmPm(r.start_time) : '-'} - {r.end_time ? toAmPm(r.end_time) : '-'}
                     </td>
                     <td style={{ color: 'var(--grass-bright)', fontWeight: 600 }}>Rs.{r.amount}</td>
-                    <td style={{ fontFamily: 'monospace', fontSize: 11, color: 'var(--text-muted)', maxWidth: 160, overflow: 'hidden', textOverflow: 'ellipsis' }}>
-                      {r.razorpay_payment_id}
-                    </td>
                     <td><span className="badge badge-green">{r.status}</span></td>
                   </tr>
                 ))}

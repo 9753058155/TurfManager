@@ -1,4 +1,5 @@
 export const dynamic = 'force-dynamic'
+
 import { NextRequest, NextResponse } from 'next/server'
 import { supabaseAdmin } from '@/lib/supabase'
 import crypto from 'crypto'
@@ -78,7 +79,9 @@ export async function GET(req: NextRequest) {
         date: booking.date,
         startTime: booking.start_time,
         endTime: booking.end_time,
-        userId: booking.user_id
+        userId: booking.user_id,
+        userName: booking.user_name || null,
+        userPhone: booking.user_phone || null,
       }
     })
   }
