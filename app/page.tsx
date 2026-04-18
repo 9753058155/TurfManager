@@ -134,10 +134,32 @@ export default function HomePage() {
         prefill: { name: profile.full_name, email: user.email },
         theme: { color: '#40916c' },
         handler: async (response: any) => {
-          // Frontend confirmation (webhook is real source of truth)
-          toast('Payment successful! Booking confirmed.', 'success')
-          fetchSlots()
-          setTimeout(() => window.location.href = `/booking/${bookingId}`, 1500)
+          // Verify payment signature on backend — source of truth
+          toast('Verifying payment...', 'info')
+          try {
+            const verifyRes = await fetch('/api/verify-payment', {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({
+                razorpay_order_id: response.razorpay_order_id,
+                razorpay_payment_id: response.razorpay_payment_id,
+                razorpay_signature: response.razorpay_signature,
+                bookingId,
+              })
+            })
+            const result = await verifyRes.json()
+            if (result.error) {
+              toast('Payment verification failed: ' + result.error, 'error')
+              return
+            }
+            toast('Payment confirmed! Booking created.', 'success')
+            fetchSlots()
+            setTimeout(() => window.location.href = `/booking/${bookingId}`, 1200)
+          } catch {
+            // Webhook will still confirm as fallback
+            toast('Payment done! Booking confirming...', 'info')
+            setTimeout(() => window.location.href = `/booking/${bookingId}`, 1500)
+          }
         },
         modal: {
           ondismiss: async () => {

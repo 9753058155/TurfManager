@@ -18,7 +18,8 @@ export default function AdminPage() {
   const [profile, setProfile] = useState<any>(null)
   const [bookings, setBookings] = useState<any[]>([])
   const [slotFees, setSlotFees] = useState<any[]>([])
-  const [tab, setTab] = useState<'bookings'|'pricing'>('bookings')
+  const [receipts, setReceipts] = useState<any[]>([])
+  const [tab, setTab] = useState<'bookings'|'pricing'|'receipts'>('bookings')
   const [loading, setLoading] = useState(true)
   const [editFee, setEditFee] = useState<{id:string; slot_time:string; price:number} | null>(null)
   const [savingFee, setSavingFee] = useState(false)
@@ -35,6 +36,15 @@ export default function AdminPage() {
     setTimeout(() => setMsg(null), 4000)
   }
 
+  const fetchReceipts = async () => {
+    const { data, error } = await supabase
+      .from('receipts')
+      .select('*')
+      .order('created_at', { ascending: false })
+      .limit(100)
+    if (!error) setReceipts(data ?? [])
+  }
+
   useEffect(() => {
     supabase.auth.getUser().then(async ({ data }) => {
       if (!data.user) { window.location.href = '/auth'; return }
@@ -46,7 +56,7 @@ export default function AdminPage() {
       // Load saved default price from localStorage
       const saved = localStorage.getItem(DEFAULT_PRICE_KEY)
       if (saved) { setDefaultPrice(Number(saved)); setTempDefault(Number(saved)) }
-      await Promise.all([fetchBookings(), fetchFees()])
+      await Promise.all([fetchBookings(), fetchFees(), fetchReceipts()])
       setLoading(false)
     })
   }, [])
@@ -184,7 +194,7 @@ export default function AdminPage() {
 
         {/* Tabs */}
         <div className="tabs" style={{ maxWidth: 360, marginBottom: 24 }}>
-          {(['bookings', 'pricing'] as const).map(t => (
+          {(['bookings', 'receipts', 'pricing'] as const).map(t => (
             <button key={t} className={`tab-btn ${tab === t ? 'active' : ''}`}
               onClick={() => { setTab(t); setEditFee(null) }}>
               {t.charAt(0).toUpperCase() + t.slice(1)}
@@ -249,6 +259,55 @@ export default function AdminPage() {
                 ))}
                 {bookings.length === 0 && (
                   <tr><td colSpan={6} style={{ textAlign: 'center', color: 'var(--text-muted)', padding: '48px' }}>No bookings yet</td></tr>
+                )}
+              </tbody>
+            </table>
+          </div>
+        )}
+
+        {/* RECEIPTS TAB */}
+        {tab === 'receipts' && (
+          <div className="card" style={{ overflowX: 'auto' }}>
+            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 20 }}>
+              <h3 style={{ fontFamily: 'Bebas Neue', fontSize: 26 }}>PAYMENT RECEIPTS</h3>
+              <button className="btn btn-ghost" style={{ padding: '8px 16px', fontSize: 13 }} onClick={fetchReceipts}>
+                Refresh
+              </button>
+            </div>
+            <table className="table">
+              <thead>
+                <tr>
+                  <th>Receipt #</th>
+                  <th>Date</th>
+                  <th>Slot</th>
+                  <th>Amount</th>
+                  <th>Payment ID</th>
+                  <th>Status</th>
+                </tr>
+              </thead>
+              <tbody>
+                {receipts.map(r => (
+                  <tr key={r.id}>
+                    <td style={{ fontFamily: 'monospace', fontSize: 12, color: 'var(--grass-bright)' }}>
+                      {r.receipt_number}
+                    </td>
+                    <td>{r.date}</td>
+                    <td style={{ whiteSpace: 'nowrap' }}>
+                      {r.start_time ? toAmPm(r.start_time) : '-'} - {r.end_time ? toAmPm(r.end_time) : '-'}
+                    </td>
+                    <td style={{ color: 'var(--grass-bright)', fontWeight: 600 }}>Rs.{r.amount}</td>
+                    <td style={{ fontFamily: 'monospace', fontSize: 11, color: 'var(--text-muted)', maxWidth: 160, overflow: 'hidden', textOverflow: 'ellipsis' }}>
+                      {r.razorpay_payment_id}
+                    </td>
+                    <td><span className="badge badge-green">{r.status}</span></td>
+                  </tr>
+                ))}
+                {receipts.length === 0 && (
+                  <tr>
+                    <td colSpan={6} style={{ textAlign: 'center', color: 'var(--text-muted)', padding: '48px' }}>
+                      No receipts yet. Complete a payment to see receipts here.
+                    </td>
+                  </tr>
                 )}
               </tbody>
             </table>
