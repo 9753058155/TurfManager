@@ -454,5 +454,9 @@ label {
 /* Responsive */
 @media (max-width: 640px) {
   .slot-grid { grid-template-columns: repeat(auto-fill, minmax(140px, 1fr)); }
-  .hide-mobile { display: none; }
+  .hide-mobile { display: none !important; }
+  .show-mobile { display: flex !important; }
+}
+@media (min-width: 641px) {
+  .show-mobile { display: none !important; }
 }

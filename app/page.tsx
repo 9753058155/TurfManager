@@ -141,11 +141,21 @@ export default function HomePage() {
 
       if (!rzpKey) { toast('Payment config missing. Contact support.', 'error'); return }
 
-      // iOS Safari: use redirect instead of popup
+      // iOS Safari: Razorpay hosted checkout page avoids popup blocker
       if (isIOS()) {
-        const redirectUrl = `${window.location.origin}/api/razorpay-redirect?` +
-          `bookingId=${bookingId}&orderId=${orderId}&amount=${razorpayAmount * 100}&key=${rzpKey}`
-        window.location.href = redirectUrl
+        // Store bookingId so we can verify after redirect returns
+        sessionStorage.setItem('pending_booking_id', bookingId)
+        sessionStorage.setItem('pending_wallet_amount', String(walletAmount))
+        window.location.href =
+          `https://api.razorpay.com/v1/checkout/embedded?` +
+          `key_id=${rzpKey}` +
+          `&order_id=${orderId}` +
+          `&name=TurfZone` +
+          `&description=${encodeURIComponent(toAmPm(slot.start_time) + ' - ' + toAmPm(slot.end_time))}` +
+          `&prefill[name]=${encodeURIComponent(profile.full_name || '')}` +
+          `&prefill[email]=${encodeURIComponent(user.email || '')}` +
+          `&callback_url=${encodeURIComponent(window.location.origin + '/api/razorpay-callback')}` +
+          `&cancel_url=${encodeURIComponent(window.location.origin + '/')}`
         return
       }
 
@@ -272,11 +282,18 @@ export default function HomePage() {
           ) : (
             <div className="slot-grid" style={{ marginBottom: 60 }}>
               {slots.map(slot => (
-                <div key={slot.id} className={`slot-card ${statusColor(slot)}`}
-                  onClick={() => handleSlotClick(slot)}>
+                <div key={slot.id}
+                  className={`slot-card ${statusColor(slot)}`}
+                  onClick={() => slot.status === 'available' && handleSlotClick(slot)}
+                  style={{ cursor: slot.status === 'booked' ? 'not-allowed' : 'pointer' }}
+                >
                   <div className="slot-time">{toAmPm(slot.start_time)}</div>
-                  <div style={{ fontSize: 11, color: 'var(--text-muted)', margin: '2px 0' }}>to {toAmPm(slot.end_time)}</div>
-                  <div className="slot-price">₹{slot.price}</div>
+                  <div style={{ fontSize: 11, color: 'var(--text-muted)', margin: '2px 0' }}>
+                    to {toAmPm(slot.end_time)}
+                  </div>
+                  {slot.status === 'available' && (
+                    <div className="slot-price">₹{slot.price}</div>
+                  )}
                   <div className="slot-status">
                     {slot.status === 'booked' ? '● Booked' : '○ Free'}
                   </div>
