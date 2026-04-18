@@ -21,7 +21,8 @@ export default function AdminPage() {
   const [receipts, setReceipts] = useState<any[]>([])
   const [tab, setTab] = useState<'bookings'|'pricing'|'receipts'>('bookings')
   const [loading, setLoading] = useState(true)
-  const [editFee, setEditFee] = useState<{id:string; slot_time:string; price:number} | null>(null)
+  const [localPrices, setLocalPrices] = useState<Record<string, string>>({})
+  const [editingSlot, setEditingSlot] = useState<string | null>(null)
   const [savingFee, setSavingFee] = useState(false)
   const [msg, setMsg] = useState<{text:string;type:string}|null>(null)
 
@@ -100,19 +101,21 @@ export default function AdminPage() {
   }
 
   // Save price for ONE specific slot using slot_time as the key
-  const saveFee = async () => {
-    if (!editFee || !user) return
+  const saveFee = async (slotTime: string) => {
+    if (!user) return
+    const price = Number(localPrices[slotTime])
+    if (isNaN(price) || price < 0) { showMsg('Invalid price', 'error'); return }
     setSavingFee(true)
-    const snapshot = { ...editFee }
     const res = await fetch('/api/update-fee', {
       method: 'POST', headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ slotTime: snapshot.slot_time, price: snapshot.price, userId: user.id })
+      body: JSON.stringify({ slotTime, price, userId: user.id })
     })
     const json = await res.json()
     setSavingFee(false)
     if (json.error) { showMsg(json.error, 'error'); return }
-    showMsg(`${toAmPm(snapshot.slot_time)} updated to Rs.${snapshot.price}`)
-    setEditFee(null)
+    showMsg(`${toAmPm(slotTime)} updated to Rs.${price}`)
+    setEditingSlot(null)
+    setLocalPrices(prev => { const n = {...prev}; delete n[slotTime]; return n })
     fetchFees()
   }
 
@@ -196,7 +199,7 @@ export default function AdminPage() {
         <div className="tabs" style={{ maxWidth: 360, marginBottom: 24 }}>
           {(['bookings', 'receipts', 'pricing'] as const).map(t => (
             <button key={t} className={`tab-btn ${tab === t ? 'active' : ''}`}
-              onClick={() => { setTab(t); setEditFee(null) }}>
+              onClick={() => { setTab(t); setEditingSlot(null); setLocalPrices({}) }}>
               {t.charAt(0).toUpperCase() + t.slice(1)}
             </button>
           ))}
@@ -397,12 +400,11 @@ export default function AdminPage() {
                         </div>
                         <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(240px, 1fr))', gap: 10 }}>
                           {grouped.map(f => {
-                            const isEditing = editFee !== null && editFee.id === f.id
-                            const displayPrice = isEditing ? editFee.price : f.price
+                            const isEditing = editingSlot === f.slot_time
                             const [h, mins] = f.slot_time.split(':').map(Number)
-                            const endHour = h + 1
-                            const endTime = `${String(endHour).padStart(2, '0')}:${String(mins).padStart(2, '0')}`
+                            const endTime = `${String(h+1).padStart(2,'0')}:${String(mins).padStart(2,'0')}`
                             const isDefault = f.price === defaultPrice
+                            const inputVal = localPrices[f.slot_time] ?? String(f.price)
 
                             return (
                               <div key={f.id} style={{
@@ -417,9 +419,9 @@ export default function AdminPage() {
                                   </div>
                                   <div style={{ display: 'flex', alignItems: 'center', gap: 6, marginTop: 2 }}>
                                     <span style={{ fontFamily: 'Bebas Neue', fontSize: 24, color: 'var(--grass-bright)' }}>
-                                      Rs.{displayPrice}
+                                      Rs.{isEditing ? (localPrices[f.slot_time] ?? f.price) : f.price}
                                     </span>
-                                    {isDefault && (
+                                    {isDefault && !isEditing && (
                                       <span style={{ fontSize: 10, color: 'var(--text-muted)', background: 'rgba(122,158,142,0.15)', padding: '2px 6px', borderRadius: 4 }}>
                                         default
                                       </span>
@@ -432,25 +434,23 @@ export default function AdminPage() {
                                     <input
                                       className="input"
                                       type="number" min={0}
-                                      value={editFee.price}
-                                      onChange={e => setEditFee(prev =>
-                                        prev !== null ? { ...prev, price: Number(e.target.value) } : prev
-                                      )}
+                                      value={inputVal}
+                                      onChange={e => setLocalPrices(prev => ({ ...prev, [f.slot_time]: e.target.value }))}
                                       style={{ width: 80, padding: '7px 8px', fontSize: 14 }}
-                                      onKeyDown={e => e.key === 'Enter' && saveFee()}
+                                      onKeyDown={e => e.key === 'Enter' && saveFee(f.slot_time)}
                                       autoFocus
                                     />
                                     <button className="btn btn-primary" style={{ padding: '7px 12px', fontSize: 13 }}
-                                      onClick={saveFee} disabled={savingFee}>
+                                      onClick={() => saveFee(f.slot_time)} disabled={savingFee}>
                                       {savingFee ? <span className="spinner" /> : 'Save'}
                                     </button>
                                     <button className="btn btn-ghost" style={{ padding: '7px 10px', fontSize: 13 }}
-                                      onClick={() => setEditFee(null)}>X</button>
+                                      onClick={() => { setEditingSlot(null); setLocalPrices(prev => { const n={...prev}; delete n[f.slot_time]; return n }) }}>X</button>
                                   </div>
                                 ) : (
                                   <button className="btn btn-ghost"
                                     style={{ padding: '7px 14px', fontSize: 12, flexShrink: 0 }}
-                                    onClick={() => setEditFee({ id: f.id, slot_time: f.slot_time, price: f.price })}>
+                                    onClick={() => { setEditingSlot(f.slot_time); setLocalPrices(prev => ({ ...prev, [f.slot_time]: String(f.price) })) }}>
                                     Edit
                                   </button>
                                 )}

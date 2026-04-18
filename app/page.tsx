@@ -9,9 +9,17 @@ import { format, addDays } from 'date-fns'
 declare global { interface Window { Razorpay: any } }
 
 type SlotFee = { id: string; slot_type: string; slot_time: string; price: number; duration_minutes: number }
-type Slot = {
-  id: string; date: string; start_time: string; end_time: string
-  status: 'available' | 'locked' | 'booked'; price?: number
+type Slot = { id: string; date: string; start_time: string; end_time: string; status: 'available'|'locked'|'booked'; price?: number }
+
+function toAmPm(t: string) {
+  const [h, m] = t.split(':').map(Number)
+  const p = h >= 12 ? 'PM' : 'AM'
+  return `${h % 12 === 0 ? 12 : h % 12}:${String(m).padStart(2,'0')} ${p}`
+}
+
+function isIOS() {
+  return /iPad|iPhone|iPod/.test(navigator.userAgent) ||
+    (navigator.platform === 'MacIntel' && navigator.maxTouchPoints > 1)
 }
 
 function getNextDays(n: number) {
@@ -54,18 +62,15 @@ export default function HomePage() {
 
   const fetchSlots = useCallback(async () => {
     setLoading(true)
-    // fetch slot fees
     const { data: fees } = await supabase.from('slot_fees').select('*')
     if (fees) setSlotFees(fees)
 
-    // fetch bookings for date to know which slots are taken
     const { data: bookings } = await supabase
       .from('bookings')
       .select('start_time, end_time, status')
       .eq('date', selectedDate)
       .in('status', ['confirmed', 'pending'])
 
-    // Generate 6am-10pm time slots (1 hour each)
     const generated: Slot[] = []
     for (let h = 6; h < 22; h++) {
       const start = `${String(h).padStart(2,'0')}:00`
@@ -87,12 +92,11 @@ export default function HomePage() {
 
   useEffect(() => { fetchSlots() }, [fetchSlots])
 
-  // Realtime: listen to booking changes for this date
   useEffect(() => {
     const channel = supabase
       .channel(`slots-${selectedDate}`)
       .on('postgres_changes', {
-        event: '*', schema: 'public', table: 'booking',
+        event: '*', schema: 'public', table: 'bookings',
         filter: `date=eq.${selectedDate}`
       }, () => fetchSlots())
       .subscribe()
@@ -106,81 +110,73 @@ export default function HomePage() {
     setBookingModal(true)
   }
 
-  const handlePayment = async (slot: Slot) => {
+  // walletAmount: deducted from wallet, razorpayAmount: charged via Razorpay
+  const handlePayment = async (slot: Slot, walletAmount: number, razorpayAmount: number) => {
     if (!user || !profile) return
     setBookingModal(false)
-    
+
     try {
-      // Create Razorpay order via API
+      // Create order on backend
       const res = await fetch('/api/create-order', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          amount: slot.price,
-          slot: slot,
-          userId: user.id
-        })
+        body: JSON.stringify({ amount: slot.price, razorpayAmount, walletAmount, slot, userId: user.id })
       })
-      const { orderId, bookingId, error } = await res.json()
+      const { orderId, bookingId, error, walletOnly } = await res.json()
       if (error) { toast(error, 'error'); return }
 
-      // Read key from meta tag injected by layout, or window global
+      // Wallet-only payment (no Razorpay needed)
+      if (walletOnly) {
+        toast('Booking confirmed using wallet!', 'success')
+        fetchSlots()
+        fetchProfile(user.id)
+        setTimeout(() => window.location.href = `/booking/${bookingId}`, 1000)
+        return
+      }
+
+      // Razorpay payment
       const rzpKey = (window as any).__NEXT_PUBLIC_RAZORPAY_KEY_ID
         || document.querySelector('meta[name="rzp-key"]')?.getAttribute('content')
         || ''
 
-      if (!rzpKey) {
-        toast('Razorpay key not configured. Check NEXT_PUBLIC_RAZORPAY_KEY_ID env var.', 'error')
+      if (!rzpKey) { toast('Payment config missing. Contact support.', 'error'); return }
+
+      // iOS Safari: use redirect instead of popup
+      if (isIOS()) {
+        const redirectUrl = `${window.location.origin}/api/razorpay-redirect?` +
+          `bookingId=${bookingId}&orderId=${orderId}&amount=${razorpayAmount * 100}&key=${rzpKey}`
+        window.location.href = redirectUrl
         return
       }
 
+      // Desktop/Android: standard popup
       const options = {
         key: rzpKey,
-        amount: (slot.price || 500) * 100,
+        amount: razorpayAmount * 100,
         currency: 'INR',
         name: 'TurfZone',
-        description: `Slot: ${slot.start_time} - ${slot.end_time}`,
+        description: `${toAmPm(slot.start_time)} – ${toAmPm(slot.end_time)}`,
         order_id: orderId,
         prefill: { name: profile.full_name, email: user.email },
         theme: { color: '#40916c' },
-        config: {
-          display: {
-            blocks: {
-              banks: { name: 'Pay via Netbanking', instruments: [{ method: 'netbanking' }] },
-              upi:   { name: 'Pay via UPI',        instruments: [{ method: 'upi' }] },
-              card:  { name: 'Pay via Card',        instruments: [{ method: 'card' }] },
-            },
-            sequence: ['block.upi', 'block.banks', 'block.card'],
-            preferences: { show_default_blocks: true }
-          }
-        },
         handler: async (response: any) => {
-          // Verify payment signature on backend — source of truth
           toast('Verifying payment...', 'info')
-          try {
-            const verifyRes = await fetch('/api/verify-payment', {
-              method: 'POST',
-              headers: { 'Content-Type': 'application/json' },
-              body: JSON.stringify({
-                razorpay_order_id: response.razorpay_order_id,
-                razorpay_payment_id: response.razorpay_payment_id,
-                razorpay_signature: response.razorpay_signature,
-                bookingId,
-              })
+          const verifyRes = await fetch('/api/verify-payment', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+              razorpay_order_id: response.razorpay_order_id,
+              razorpay_payment_id: response.razorpay_payment_id,
+              razorpay_signature: response.razorpay_signature,
+              bookingId, walletAmount
             })
-            const result = await verifyRes.json()
-            if (result.error) {
-              toast('Payment verification failed: ' + result.error, 'error')
-              return
-            }
-            toast('Payment confirmed! Booking created.', 'success')
-            fetchSlots()
-            setTimeout(() => window.location.href = `/booking/${bookingId}`, 1200)
-          } catch {
-            // Webhook will still confirm as fallback
-            toast('Payment done! Booking confirming...', 'info')
-            setTimeout(() => window.location.href = `/booking/${bookingId}`, 1500)
-          }
+          })
+          const result = await verifyRes.json()
+          if (result.error) { toast('Verification failed: ' + result.error, 'error'); return }
+          toast('Booking confirmed!', 'success')
+          fetchSlots()
+          fetchProfile(user.id)
+          setTimeout(() => window.location.href = `/booking/${bookingId}`, 1000)
         },
         modal: {
           ondismiss: async () => {
@@ -212,24 +208,25 @@ export default function HomePage() {
     <>
       <Nav user={user} profile={profile} />
 
-      {/* Hero */}
       <div className="hero">
         <div className="hero-title">BOOK YOUR<br /><em>TURF</em> NOW</div>
         <p className="hero-sub">Premium grass. Prime slots. Pay & play.</p>
       </div>
 
-      {/* Main Content */}
       <div className="container">
-        {/* Stats strip */}
+        {/* Wallet strip — only shown when logged in */}
         {profile && (
-          <div style={{ display:'flex', gap:12, marginBottom:32, flexWrap:'wrap' }}>
-            <div className="stat-card" style={{ flex:1, minWidth:160 }}>
-              <div className="stat-value">₹{profile.wallet_balance ?? 0}</div>
-              <div className="stat-label">Wallet Balance</div>
-            </div>
-            <div className="stat-card" style={{ flex:1, minWidth:160 }}>
-              <div className="stat-value" style={{ color:'var(--accent)' }}>IST</div>
-              <div className="stat-label">All times in IST</div>
+          <div style={{ marginBottom: 24 }}>
+            <div className="stat-card" style={{ display: 'inline-flex', alignItems: 'center', gap: 12, padding: '14px 20px' }}>
+              <span style={{ fontSize: 22 }}>💰</span>
+              <div>
+                <div style={{ fontFamily: 'Bebas Neue', fontSize: 28, color: 'var(--grass-bright)', lineHeight: 1 }}>
+                  ₹{profile.wallet_balance ?? 0}
+                </div>
+                <div style={{ fontSize: 12, color: 'var(--text-muted)', textTransform: 'uppercase', letterSpacing: '0.05em' }}>
+                  Wallet Balance
+                </div>
+              </div>
             </div>
           </div>
         )}
@@ -237,16 +234,13 @@ export default function HomePage() {
         {/* Date selector */}
         <div className="section">
           <h2 className="section-title">SELECT DATE</h2>
-          <p className="section-sub">7-day advance booking available</p>
+          <p className="section-sub">7-day advance booking</p>
           <div className="date-strip">
             {days.map(day => {
               const dateStr = format(day, 'yyyy-MM-dd')
               return (
-                <div
-                  key={dateStr}
-                  className={`date-chip ${selectedDate === dateStr ? 'active' : ''}`}
-                  onClick={() => setSelectedDate(dateStr)}
-                >
+                <div key={dateStr} className={`date-chip ${selectedDate === dateStr ? 'active' : ''}`}
+                  onClick={() => setSelectedDate(dateStr)}>
                   <div className="date-chip-day">{format(day, 'EEE')}</div>
                   <div className="date-chip-num">{format(day, 'd')}</div>
                 </div>
@@ -256,84 +250,52 @@ export default function HomePage() {
         </div>
 
         {/* Slot grid */}
-        <div className="section" style={{ paddingTop:0 }}>
+        <div className="section" style={{ paddingTop: 0 }}>
           <div style={{ display:'flex', justifyContent:'space-between', alignItems:'center', marginBottom:20 }}>
             <div>
               <h2 className="section-title">AVAILABLE SLOTS</h2>
-              <p className="section-sub" style={{ marginBottom:0 }}>{format(new Date(selectedDate + 'T00:00:00'), 'EEEE, MMMM d')}</p>
+              <p className="section-sub" style={{ marginBottom:0 }}>
+                {format(new Date(selectedDate + 'T00:00:00'), 'EEEE, MMMM d')}
+              </p>
             </div>
-            <div style={{ display:'flex', gap:16, fontSize:13, color:'var(--text-muted)' }}>
-              <span>🟢 Available</span>
-              <span>🟡 Locked</span>
+            <div style={{ display:'flex', gap:12, fontSize:13, color:'var(--text-muted)' }}>
+              <span>🟢 Free</span>
               <span>🔴 Booked</span>
             </div>
           </div>
 
           {loading ? (
-            <div style={{ textAlign:'center', padding:'60px 0', color:'var(--text-muted)' }}>
+            <div style={{ textAlign:'center', padding:'60px 0' }}>
               <div className="spinner" style={{ width:36, height:36, borderWidth:3 }} />
-              <p style={{ marginTop:16 }}>Loading slots...</p>
+              <p style={{ marginTop:16, color:'var(--text-muted)' }}>Loading slots...</p>
             </div>
           ) : (
-            <div className="slot-grid">
+            <div className="slot-grid" style={{ marginBottom: 60 }}>
               {slots.map(slot => (
-                <div
-                  key={slot.id}
-                  className={`slot-card ${statusColor(slot)}`}
-                  onClick={() => handleSlotClick(slot)}
-                >
-                  <div className="slot-time">{slot.start_time}–{slot.end_time}</div>
+                <div key={slot.id} className={`slot-card ${statusColor(slot)}`}
+                  onClick={() => handleSlotClick(slot)}>
+                  <div className="slot-time">{toAmPm(slot.start_time)}</div>
+                  <div style={{ fontSize: 11, color: 'var(--text-muted)', margin: '2px 0' }}>to {toAmPm(slot.end_time)}</div>
                   <div className="slot-price">₹{slot.price}</div>
                   <div className="slot-status">
-                    {slot.status === 'booked' ? '● Booked' :
-                     slot.status === 'locked' ? '◌ Locked' : '○ Free'}
+                    {slot.status === 'booked' ? '● Booked' : '○ Free'}
                   </div>
                 </div>
               ))}
             </div>
           )}
         </div>
-
-        {/* Pricing info */}
-        <div className="card" style={{ marginBottom:60 }}>
-          <h3 style={{ fontFamily:'Bebas Neue', fontSize:24, marginBottom:16 }}>PRICING</h3>
-          <div style={{ display:'flex', gap:24, flexWrap:'wrap' }}>
-            {slotFees.map(f => (
-              <div key={f.id} style={{ flex:1, minWidth:140 }}>
-                <div style={{ fontSize:13, color:'var(--text-muted)', textTransform:'uppercase', letterSpacing:'0.05em' }}>
-                  {f.slot_time} ({f.slot_type}) slot
-                </div>
-                <div style={{ fontFamily:'Bebas Neue', fontSize:36, color:'var(--grass-bright)' }}>₹{f.price}</div>
-                <div style={{ fontSize:13, color:'var(--text-muted)' }}>{f.duration_minutes} minutes</div>
-              </div>
-            ))}
-            {slotFees.length === 0 && (
-              <>
-                <div style={{ flex:1 }}>
-                  <div style={{ fontSize:13, color:'var(--text-muted)', textTransform:'uppercase' }}>Day (6am–6pm)</div>
-                  <div style={{ fontFamily:'Bebas Neue', fontSize:36, color:'var(--grass-bright)' }}>₹500</div>
-                </div>
-                <div style={{ flex:1 }}>
-                  <div style={{ fontSize:13, color:'var(--text-muted)', textTransform:'uppercase' }}>Night (6pm–10pm)</div>
-                  <div style={{ fontFamily:'Bebas Neue', fontSize:36, color:'var(--grass-bright)' }}>₹700</div>
-                </div>
-              </>
-            )}
-          </div>
-        </div>
       </div>
 
-      {/* Booking confirmation modal */}
       {bookingModal && selectedSlot && (
         <BookingModal
           slot={selectedSlot}
           profile={profile}
-          onConfirm={() => handlePayment(selectedSlot)}
+          onConfirm={(walletAmt, rzpAmt) => handlePayment(selectedSlot, walletAmt, rzpAmt)}
           onClose={() => setBookingModal(false)}
         />
       )}
 
-      {/* Toasts */}
       <Toast toasts={toasts} />
     </>
   )
