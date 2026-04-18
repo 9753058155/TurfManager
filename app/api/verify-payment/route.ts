@@ -1,4 +1,5 @@
 export const dynamic = 'force-dynamic'
+export const maxDuration = 30
 
 import { NextRequest, NextResponse } from 'next/server'
 import { supabaseAdmin } from '@/lib/supabase'
@@ -12,49 +13,78 @@ export async function POST(req: NextRequest) {
       return NextResponse.json({ error: 'Missing fields' }, { status: 400 })
     }
 
-    // Verify Razorpay HMAC signature
+    // Step 1: Verify signature — no DB needed
     const secret = process.env.RAZORPAY_KEY_SECRET!
-    const body = razorpay_order_id + '|' + razorpay_payment_id
-    const expectedSig = crypto.createHmac('sha256', secret).update(body).digest('hex')
+    const expectedSig = crypto
+      .createHmac('sha256', secret)
+      .update(razorpay_order_id + '|' + razorpay_payment_id)
+      .digest('hex')
+
     if (expectedSig !== razorpay_signature) {
       return NextResponse.json({ error: 'Invalid payment signature' }, { status: 400 })
     }
 
     const db = supabaseAdmin()
 
-    const { data: booking } = await db.from('bookings').select('*').eq('id', bookingId).single()
-    if (!booking) return NextResponse.json({ error: 'Booking not found' }, { status: 404 })
-    if (booking.status === 'confirmed') return NextResponse.json({ ok: true, bookingId })
+    // Step 2: Fetch booking
+    const { data: booking, error: fetchErr } = await db
+      .from('bookings')
+      .select('*')
+      .eq('id', bookingId)
+      .single()
 
-    // Deduct wallet if used
-    const walletUsed = walletAmount || booking.wallet_used || 0
-    if (walletUsed > 0) {
-      const { data: profile } = await db.from('profiles').select('wallet_balance').eq('id', booking.user_id).single()
-      const newBalance = Math.max(0, (profile?.wallet_balance ?? 0) - walletUsed)
-      await db.from('profiles').update({ wallet_balance: newBalance }).eq('id', booking.user_id)
+    if (fetchErr || !booking) {
+      return NextResponse.json({ error: 'Booking not found' }, { status: 404 })
     }
 
-    // Confirm booking
-    await db.from('bookings').update({
-      status: 'confirmed',
-      payment_id: razorpay_payment_id,
-    }).eq('id', bookingId)
+    // Already confirmed — idempotent
+    if (booking.status === 'confirmed') {
+      return NextResponse.json({ ok: true, bookingId })
+    }
 
-    // Create receipt
-    const receiptNumber = `RCP-${Date.now()}-${bookingId.slice(0,6).toUpperCase()}`
-    await db.from('receipts').insert({
-      booking_id: bookingId,
-      user_id: booking.user_id,
-      razorpay_payment_id,
-      razorpay_order_id,
-      amount: booking.amount,
-      wallet_amount: walletUsed,
-      date: booking.date,
-      start_time: booking.start_time,
-      end_time: booking.end_time,
-      receipt_number: receiptNumber,
-      status: 'paid',
-    })
+    const walletUsed = walletAmount || booking.wallet_used || 0
+
+    // Step 3: Confirm booking
+    await db
+      .from('bookings')
+      .update({ status: 'confirmed', payment_id: razorpay_payment_id })
+      .eq('id', bookingId)
+
+    // Step 4: Deduct wallet if used
+    if (walletUsed > 0) {
+      const { data: p } = await db
+        .from('profiles')
+        .select('wallet_balance')
+        .eq('id', booking.user_id)
+        .single()
+
+      await db
+        .from('profiles')
+        .update({ wallet_balance: Math.max(0, (p?.wallet_balance ?? 0) - walletUsed) })
+        .eq('id', booking.user_id)
+    }
+
+    // Step 5: Insert receipt — fire and forget, webhook is fallback
+    const receiptNumber = `RCP-${Date.now()}-${bookingId.slice(0, 6).toUpperCase()}`
+    void (async () => {
+      try {
+        await db.from('receipts').insert({
+          booking_id: bookingId,
+          user_id: booking.user_id,
+          razorpay_payment_id,
+          razorpay_order_id,
+          amount: booking.amount,
+          wallet_amount: walletUsed,
+          date: booking.date,
+          start_time: booking.start_time,
+          end_time: booking.end_time,
+          receipt_number: receiptNumber,
+          status: 'paid',
+          user_name: booking.user_name || null,
+          user_phone: booking.user_phone || null,
+        })
+      } catch { /* webhook handles retry */ }
+    })()
 
     return NextResponse.json({ ok: true, bookingId, receiptNumber })
   } catch (e: any) {
