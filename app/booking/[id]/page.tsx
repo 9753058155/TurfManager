@@ -2,10 +2,9 @@
 import { useEffect, useState } from 'react'
 import { supabase } from '@/lib/supabase'
 import Nav from '@/components/Nav'
-import { use } from 'react'
 
-export default function BookingPage({ params }: { params: Promise<{ id: string }> }) {
-  const { id } = use(params)
+export default function BookingPage({ params }: { params: { id: string } }) {
+  const { id } = params
   const [booking, setBooking] = useState<any>(null)
   const [profile, setProfile] = useState<any>(null)
   const [user, setUser] = useState<any>(null)
