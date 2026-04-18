@@ -124,8 +124,18 @@ export default function HomePage() {
       const { orderId, bookingId, error } = await res.json()
       if (error) { toast(error, 'error'); return }
 
+      // Read key from meta tag injected by layout, or window global
+      const rzpKey = (window as any).__NEXT_PUBLIC_RAZORPAY_KEY_ID
+        || document.querySelector('meta[name="rzp-key"]')?.getAttribute('content')
+        || ''
+
+      if (!rzpKey) {
+        toast('Razorpay key not configured. Check NEXT_PUBLIC_RAZORPAY_KEY_ID env var.', 'error')
+        return
+      }
+
       const options = {
-        key: process.env.NEXT_PUBLIC_RAZORPAY_KEY_ID,
+        key: rzpKey,
         amount: (slot.price || 500) * 100,
         currency: 'INR',
         name: 'TurfZone',
@@ -133,6 +143,17 @@ export default function HomePage() {
         order_id: orderId,
         prefill: { name: profile.full_name, email: user.email },
         theme: { color: '#40916c' },
+        config: {
+          display: {
+            blocks: {
+              banks: { name: 'Pay via Netbanking', instruments: [{ method: 'netbanking' }] },
+              upi:   { name: 'Pay via UPI',        instruments: [{ method: 'upi' }] },
+              card:  { name: 'Pay via Card',        instruments: [{ method: 'card' }] },
+            },
+            sequence: ['block.upi', 'block.banks', 'block.card'],
+            preferences: { show_default_blocks: true }
+          }
+        },
         handler: async (response: any) => {
           // Verify payment signature on backend — source of truth
           toast('Verifying payment...', 'info')
